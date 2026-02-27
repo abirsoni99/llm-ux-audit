@@ -1,3 +1,4 @@
+const { v4: uuidv4 } = require("uuid");
 function convertCookiesToStorageState(rawCookies, url) {
 
   const hostname = new URL(url).hostname;
