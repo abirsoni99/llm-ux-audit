@@ -26,7 +26,7 @@ const path = require("path");
 
     // ---------------- BROWSER ----------------
     browser = await chromium.launch({
-      headless: true,
+      headless: false,   // IMPORTANT: fixes IndiaMART rendering + session trust
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -60,18 +60,54 @@ const path = require("path");
       timeout: 90000
     });
 
-    // Wait for dashboard scripts to render
-    await page.waitForTimeout(8000);
+    // ---------------- REAL PAGE LOAD DETECTION ----------------
 
-    // ---------------- LOGIN DETECTION ----------------
-    const currentUrl = page.url();
+    // ensure body exists
+    await page.waitForSelector("body");
 
-    if (
-      currentUrl.toLowerCase().includes("login") ||
-      currentUrl.toLowerCase().includes("signin")
-    ) {
+    // wait until meaningful dashboard content appears
+    await page.waitForFunction(() => {
+      return document.body.innerText.length > 4000;
+    }, { timeout: 90000 });
 
-      console.log("Auth failed — login detected");
+    // wait until page height stabilizes
+    async function waitForStableHeight(page) {
+      let lastHeight = 0;
+      let stableCount = 0;
+
+      while (stableCount < 5) {
+        const newHeight = await page.evaluate(() => document.body.scrollHeight);
+
+        if (newHeight === lastHeight) {
+          stableCount++;
+        } else {
+          stableCount = 0;
+          lastHeight = newHeight;
+        }
+
+        await page.waitForTimeout(1500);
+      }
+    }
+
+    await waitForStableHeight(page);
+
+    // wake lazy modules (IndiaMART loads widgets only after scroll)
+    await page.evaluate(async () => {
+      window.scrollTo(0, document.body.scrollHeight);
+      await new Promise(r => setTimeout(r, 2500));
+      window.scrollTo(0, 0);
+    });
+
+    await waitForStableHeight(page);
+
+    // ---------------- LOGIN UI DETECTION ----------------
+    const loginVisible = await page.evaluate(() => {
+      const text = document.body.innerText.toLowerCase();
+      return text.includes("login via otp") || text.includes("enter mobile number");
+    });
+
+    if (loginVisible) {
+      console.log("Auth failed — login UI detected");
 
       fs.writeFileSync(
         path.join(jobDir, "result.json"),
@@ -87,11 +123,15 @@ const path = require("path");
 
     // ---------------- SCREENSHOTS ----------------
 
+    console.log("Taking screenshots...");
+
+    // first fold
     await page.screenshot({
       path: path.join(jobDir, "firstFold.png"),
       fullPage: false
     });
 
+    // full page (now height is stable)
     await page.screenshot({
       path: path.join(jobDir, "fullPage.png"),
       fullPage: true
