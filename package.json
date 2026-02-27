@@ -1,9 +1,8 @@
 {
   "name": "llm-ux-audit",
   "version": "1.0.0",
-  "description": "Playwright UX audit service",
+  "description": "Remote logged-in UX auditor",
   "main": "server.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node server.js"
   },
@@ -11,6 +10,6 @@
     "axios": "^1.13.5",
     "dotenv": "^17.3.1",
     "express": "^4.19.2",
-    "playwright": "^1.58.2"
+    "playwright": "^1.48.0"
   }
 }

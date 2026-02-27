@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/playwright:v1.58.0-jammy
+FROM mcr.microsoft.com/playwright:v1.48.0-jammy
 
 WORKDIR /app
 
@@ -7,4 +7,9 @@ RUN npm install
 
 COPY . .
 
-CMD ["npm", "start"]
+ENV NODE_ENV=production
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["npm","start"]
