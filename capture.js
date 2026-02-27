@@ -1,31 +1,12 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
-const path = require("path");
 
-// Redirect ALL console.log to stderr
-// Prevents stdout contamination
+// VERY IMPORTANT:
+// stdout must contain ONLY JSON
+// All logs must go to stderr
 console.log = (...args) => {
   process.stderr.write(args.join(" ") + "\n");
 };
-
-async function autoScroll(page) {
-  await page.evaluate(async () => {
-    await new Promise((resolve) => {
-      let totalHeight = 0;
-      const distance = 700;
-
-      const timer = setInterval(() => {
-        window.scrollBy(0, distance);
-        totalHeight += distance;
-
-        if (totalHeight >= document.body.scrollHeight) {
-          clearInterval(timer);
-          resolve();
-        }
-      }, 800);
-    });
-  });
-}
 
 (async () => {
   let browser;
@@ -38,56 +19,70 @@ async function autoScroll(page) {
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu"
+        "--disable-blink-features=AutomationControlled"
       ]
     });
 
-    // ⭐ Inject logged-in session
+    console.error("Creating authenticated context...");
+
     const context = await browser.newContext({
-      storageState: path.join(__dirname, "auth.json"),
+      storageState: "./auth.json",
       viewport: { width: 1366, height: 900 },
       userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
     });
 
     const page = await context.newPage();
 
-    console.error("Opening logged-in Buyer dashboard...");
-
-    await page.goto("https://buyer.indiamart.com/", {
-      waitUntil: "networkidle",
-      timeout: 120000
+    // Hide automation fingerprint
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false
+      });
     });
 
-    console.error("Waiting for hydration...");
-    await page.waitForTimeout(12000);
+    console.error("Opening logged-in Buyer dashboard...");
 
-    // First fold
+    // IMPORTANT: DO NOT USE networkidle (IndiaMART never goes idle)
+    await page.goto("https://buyer.indiamart.com", {
+      waitUntil: "domcontentloaded",
+      timeout: 90000
+    });
+
+    // Let SPA actually render dashboard
+    console.error("Waiting for dashboard UI to render...");
+    await page.waitForTimeout(8000);
+
+    // Optional sanity check
+    const url = page.url();
+    console.error("Current URL:", url);
+
+    // ---------- SCREENSHOTS ----------
+
+    console.error("Capturing first fold...");
     await page.screenshot({
       path: "first-fold.png",
       fullPage: false
     });
 
-    // Scroll for lazy modules
-    await autoScroll(page);
-    await page.waitForTimeout(6000);
-
-    // Full page
-    await page.screenshot({
-      path: "full-page.png",
-      fullPage: true
-    });
-
-    // Mid section
-    await page.evaluate(() =>
-      window.scrollTo(0, document.body.scrollHeight / 2)
-    );
+    console.error("Scrolling page...");
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
     await page.waitForTimeout(3000);
 
+    console.error("Capturing mid section...");
     await page.screenshot({
       path: "mid-fold.png",
       fullPage: false
+    });
+
+    console.error("Scrolling to bottom...");
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(4000);
+
+    console.error("Capturing full page...");
+    await page.screenshot({
+      path: "full-page.png",
+      fullPage: true
     });
 
     await browser.close();
@@ -100,15 +95,17 @@ async function autoScroll(page) {
       fullPage: fs.readFileSync("full-page.png").toString("base64")
     };
 
-    // Write JSON to file instead of stdout
-    fs.writeFileSync("result.json", JSON.stringify(result));
-
-    process.exit(0);
+    // CRITICAL: Only JSON to stdout
+    process.stdout.write(JSON.stringify(result));
+    process.stdout.end();
 
   } catch (err) {
-    console.error("CAPTURE FAILED:", err);
+    console.error("CAPTURE ERROR:", err);
 
-    if (browser) await browser.close();
+    if (browser) {
+      await browser.close();
+    }
+
     process.exit(1);
   }
 })();
