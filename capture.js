@@ -7,6 +7,7 @@ async function autoScroll(page) {
     await new Promise((resolve) => {
       let totalHeight = 0;
       const distance = 700;
+
       const timer = setInterval(() => {
         const scrollHeight = document.body.scrollHeight;
         window.scrollBy(0, distance);
@@ -23,24 +24,14 @@ async function autoScroll(page) {
 
 async function waitForRealContent(page) {
   console.log("Waiting for page to load...");
-
-  // Wait for products/cards instead of page load
   await page.waitForSelector("img", { timeout: 60000 });
-
-  // Wait additional time for lazy data
   await page.waitForTimeout(6000);
 }
 
-async function captureSRP() {
-  console.log("Launching browser...");
-
+async function run() {
   const browser = await chromium.launch({
     headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage"
-    ]
+    args: ["--no-sandbox", "--disable-dev-shm-usage"]
   });
 
   const context = await browser.newContext({
@@ -54,22 +45,20 @@ async function captureSRP() {
 
   try {
     console.log("Opening Buyer MY...");
-
     await page.goto(
       "https://buyer.indiamart.com/",
       { waitUntil: "domcontentloaded", timeout: 90000 }
     );
 
-    // Detect login redirect
-    if (page.url().includes("login")) {
-      throw new Error("Login session invalid — redirected to login page");
+    if (page.url().includes("/login")) {
+      throw new Error("Session expired — login required");
     }
 
     await waitForRealContent(page);
 
     console.log("Capturing first fold...");
     await page.screenshot({
-      path: "my1_fold1.png",
+      path: "first-fold.png",
       fullPage: false
     });
 
@@ -78,27 +67,37 @@ async function captureSRP() {
 
     console.log("Capturing full page...");
     await page.screenshot({
-      path: "my1_full.png",
+      path: "full-page.png",
       fullPage: true
     });
 
-    // capture mid fold
     console.log("Capturing mid section...");
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
+    await page.evaluate(() =>
+      window.scrollTo(0, document.body.scrollHeight / 2)
+    );
     await page.waitForTimeout(3000);
 
     await page.screenshot({
-      path: "my1_mid.png",
+      path: "mid-fold.png",
       fullPage: false
     });
 
-    console.log("Screenshots saved.");
+    await browser.close();
 
+    // Convert images to base64
+    const result = {
+      firstFold: fs.readFileSync("first-fold.png").toString("base64"),
+      midFold: fs.readFileSync("mid-fold.png").toString("base64"),
+      fullPage: fs.readFileSync("full-page.png").toString("base64")
+    };
+
+    console.log(JSON.stringify(result));
+    process.exit(0);
   } catch (err) {
     console.error("Capture failed:", err.message);
-  } finally {
     await browser.close();
+    process.exit(1);
   }
 }
 
-captureSRP();
+run();
