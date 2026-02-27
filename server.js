@@ -2,169 +2,139 @@ const express = require("express");
 const fs = require("fs");
 const { exec } = require("child_process");
 const path = require("path");
+const fetch = require("node-fetch");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-// Allow large payload (auth.json can be big)
-app.use(express.json({ limit: "50mb" }));
+app.use(express.json({ limit: "100mb" }));
 
-// Health check for Railway
 app.get("/", (req, res) => {
   res.send("UX Audit service alive");
 });
 
-/*
-  MAIN ENDPOINT
-  Supports:
-  - Local mode (default auth.json + fixed URL)
-  - Frontend mode (dynamic URL + auth from Lovable)
-*/
 app.post("/run-audit", async (req, res) => {
   try {
-    console.log("Audit request received...");
+    console.log("Audit request received");
 
     const isFrontend = req.body?.is_frontend === true;
 
     let targetUrl;
     let authFilePath;
 
-    // =============================
-    // FRONTEND MODE (Lovable)
-    // =============================
+    // ---------------- Frontend Mode ----------------
     if (isFrontend) {
-      console.log("Frontend mode enabled");
-
       const { url, auth } = req.body;
 
       if (!url || !auth) {
-        return res.status(400).json({
-          status: "failed",
-          message: "Missing url or auth in request body"
-        });
+        return res.status(400).json({ error: "Missing url or auth" });
       }
 
       targetUrl = url;
-
-      // Write temporary auth file
       authFilePath = path.join(__dirname, "temp-auth.json");
       fs.writeFileSync(authFilePath, JSON.stringify(auth));
-
-      console.log("Temporary auth written");
-    }
-
-    // =============================
-    // DEFAULT LOCAL MODE
-    // =============================
-    else {
-      console.log("Local mode enabled");
-
+    } else {
       targetUrl = "https://buyer.indiamart.com";
       authFilePath = path.join(__dirname, "auth.json");
-
-      if (!fs.existsSync(authFilePath)) {
-        return res.status(500).json({
-          status: "failed",
-          message: "auth.json not found on server"
-        });
-      }
     }
 
-    // =============================
-    // Prepare config for capture.js
-    // =============================
-    const runConfigPath = path.join(__dirname, "run-config.json");
-
+    // Write config for capture.js
     fs.writeFileSync(
-      runConfigPath,
+      path.join(__dirname, "run-config.json"),
       JSON.stringify({
         url: targetUrl,
         authFile: authFilePath
       })
     );
 
-    console.log("Run config written");
+    // Remove old result
+    if (fs.existsSync("result.json")) fs.unlinkSync("result.json");
 
-    // Remove previous result file if exists
-    const resultPath = path.join(__dirname, "result.json");
-    if (fs.existsSync(resultPath)) {
-      fs.unlinkSync(resultPath);
-    }
+    // Run Playwright capture
+    exec("node capture.js", { maxBuffer: 1024 * 1024 * 300 }, async (error, stdout, stderr) => {
 
-    // =============================
-    // Execute Playwright
-    // =============================
-    exec(
-      "node capture.js",
-      { maxBuffer: 1024 * 1024 * 200 }, // allow large output
-      (error, stdout, stderr) => {
+      if (stderr) console.log(stderr);
 
-        if (stderr) {
-          console.error("Playwright stderr:", stderr);
-        }
+      if (error) {
+        console.error(error);
+        return res.status(500).json({ error: "Playwright execution failed" });
+      }
 
-        if (error) {
-          console.error("Playwright execution error:", error);
+      if (!fs.existsSync("result.json")) {
+        return res.status(500).json({ error: "Result file not generated" });
+      }
 
-          return res.status(500).json({
-            status: "failed",
-            message: "Playwright execution failed"
-          });
-        }
+      const data = JSON.parse(fs.readFileSync("result.json", "utf8"));
 
-        if (!fs.existsSync(resultPath)) {
-          console.error("Result file not generated");
+      // ---------------- LLM PART ----------------
+      if (req.body.llm) {
+        console.log("LLM analysis requested");
 
-          return res.status(500).json({
-            status: "failed",
-            message: "Result file not generated"
-          });
-        }
+        const { provider, model, apiKey, prompt } = req.body.llm;
 
-        let data;
-        try {
-          data = JSON.parse(fs.readFileSync(resultPath, "utf8"));
-        } catch (parseErr) {
-          console.error("Result parse error:", parseErr);
+        const images = [
+          data.firstFold,
+          data.midFold,
+          data.fullPage
+        ].map(img => ({
+          type: "input_image",
+          image_url: `data:image/png;base64,${img}`
+        }));
 
-          return res.status(500).json({
-            status: "failed",
-            message: "Failed to parse result file"
-          });
-        }
+        const payload = {
+          model: model,
+          messages: [
+            {
+              role: "system",
+              content: "You are a senior UX auditor. Provide structured usability analysis."
+            },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt || "Audit this UI." },
+                ...images
+              ]
+            }
+          ]
+        };
 
-        console.log("Capture successful, returning response");
-
-        res.json({
-          status: "success",
-          url: data.url,
-          capturedAt: new Date().toISOString(),
-          screenshots: {
-            firstFold: data.firstFold,
-            midFold: data.midFold,
-            fullPage: data.fullPage
-          }
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
         });
 
-        // Optional cleanup of temp auth
-        if (isFrontend && fs.existsSync(authFilePath)) {
-          fs.unlinkSync(authFilePath);
-          console.log("Temporary auth cleaned");
-        }
+        const llmResult = await response.json();
+
+        return res.json({
+          status: "success",
+          url: data.url,
+          analysis: llmResult
+        });
       }
-    );
+
+      // If no LLM requested, just send screenshots
+      res.json({
+        status: "success",
+        url: data.url,
+        screenshots: data
+      });
+
+      // cleanup temp auth
+      if (isFrontend && fs.existsSync(authFilePath)) {
+        fs.unlinkSync(authFilePath);
+      }
+    });
 
   } catch (err) {
-    console.error("Server error:", err);
-
-    res.status(500).json({
-      status: "failed",
-      message: "Server error"
-    });
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`UX Audit server running on port ${PORT}`);
 });
