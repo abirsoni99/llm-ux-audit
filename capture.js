@@ -6,25 +6,44 @@ const path = require("path");
   let browser;
 
   try {
+    /* ------------------------- VALIDATE ARGUMENT ------------------------- */
+
     const jobDir = process.argv[2];
-    const config = JSON.parse(
-      fs.readFileSync(path.join(jobDir, "run-config.json"), "utf8")
-    );
+
+    if (!jobDir) {
+      throw new Error("capture.js requires a job directory argument");
+    }
+
+    const configPath = path.join(jobDir, "run-config.json");
+
+    if (!fs.existsSync(configPath)) {
+      throw new Error("Missing run-config.json inside job directory");
+    }
+
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
 
     const TARGET_URL = config.url;
     const DEVICE = config.device || "desktop";
-    const AUTH_FILE = config.authFile;
+    const AUTH_FILE = path.resolve(jobDir, config.authFile);
 
-    console.log("Starting capture:", TARGET_URL);
+    if (!TARGET_URL) throw new Error("No url provided");
+    if (!fs.existsSync(AUTH_FILE)) throw new Error("auth.json not found");
+
+    console.error("Capture starting for:", TARGET_URL);
+
+    /* ------------------------- LAUNCH BROWSER ------------------------- */
 
     browser = await chromium.launch({
-      headless: true,
+      headless: true, // IMPORTANT: Railway must stay headless
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage"
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled"
       ]
     });
+
+    /* ------------------------- CONTEXT (DEVICE) ------------------------- */
 
     let context;
 
@@ -32,47 +51,68 @@ const path = require("path");
       const iphone = devices["iPhone 13"];
       context = await browser.newContext({
         ...iphone,
-        storageState: AUTH_FILE
+        storageState: AUTH_FILE,
+        locale: "en-IN",
+        timezoneId: "Asia/Kolkata"
       });
     } else {
       context = await browser.newContext({
         viewport: { width: 1366, height: 900 },
+        storageState: AUTH_FILE,
         locale: "en-IN",
-        timezoneId: "Asia/Kolkata",
-        storageState: AUTH_FILE
+        timezoneId: "Asia/Kolkata"
       });
     }
 
     const page = await context.newPage();
 
-    // Faster initial navigation
+    /* ------------------------- NAVIGATION ------------------------- */
+
+    console.error("Opening page...");
     await page.goto(TARGET_URL, {
-      waitUntil: "commit",
-      timeout: 60000
+      waitUntil: "domcontentloaded",
+      timeout: 90000
     });
 
-    // Wait until actual content appears (instead of blind 7s delay)
-    await page.waitForFunction(() =>
-      document.body.innerText.length > 2500,
-      { timeout: 20000 }
-    );
+    await page.waitForSelector("body", { timeout: 60000 });
 
-    // Detect login page
+    /* ------------------------- WAIT FOR REAL LOAD ------------------------- */
+    // IndiaMART loads content AFTER initial render
+
+    console.error("Waiting for dashboard to load...");
+
+    // wait text density (real content)
+    await page.waitForFunction(() => {
+      return document.body.innerText.length > 3000;
+    }, { timeout: 90000 });
+
+    // scroll to trigger lazy widgets
+    await page.evaluate(async () => {
+      window.scrollTo(0, document.body.scrollHeight);
+      await new Promise(r => setTimeout(r, 3000));
+      window.scrollTo(0, 0);
+    });
+
+    /* ------------------------- LOGIN DETECTION ------------------------- */
+
     const loginDetected = await page.evaluate(() => {
-      const text = document.body.innerText.toLowerCase();
+      const t = document.body.innerText.toLowerCase();
       return (
-        text.includes("login via otp") ||
-        text.includes("enter mobile number") ||
-        location.href.includes("login")
+        t.includes("login via otp") ||
+        t.includes("enter mobile number") ||
+        t.includes("verify mobile") ||
+        t.includes("sign in")
       );
     });
 
     if (loginDetected) {
+      console.error("LOGIN PAGE DETECTED — cookies invalid");
+
       fs.writeFileSync(
         path.join(jobDir, "result.json"),
         JSON.stringify({
           error: "AUTH_FAILED",
-          message: "Session invalid or expired"
+          message: "Cookies invalid or expired"
         })
       );
 
@@ -80,49 +120,40 @@ const path = require("path");
       return;
     }
 
-    // Trigger lazy widgets
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await page.waitForTimeout(2000);
-    await page.evaluate(() => window.scrollTo(0, 0));
+    /* ------------------------- SCREENSHOTS ------------------------- */
 
-    // -------- CAPTURE VIEWPORT SEGMENTS (faster than fullPage: true) --------
+    console.error("Taking screenshots...");
 
-    const viewportHeight = await page.evaluate(() => window.innerHeight);
+    const firstFoldPath = path.join(jobDir, "firstFold.png");
+    const fullPagePath = path.join(jobDir, "fullPage.png");
 
-    // First fold
+    // first fold
     await page.screenshot({
-      path: path.join(jobDir, "firstFold.png"),
+      path: firstFoldPath,
       fullPage: false
     });
 
-    // Second viewport
+    // full page
     await page.screenshot({
-      path: path.join(jobDir, "secondFold.png"),
-      clip: {
-        x: 0,
-        y: viewportHeight,
-        width: 1366,
-        height: viewportHeight
-      }
+      path: fullPagePath,
+      fullPage: true
     });
 
-    // Third viewport
-    await page.screenshot({
-      path: path.join(jobDir, "thirdFold.png"),
-      clip: {
-        x: 0,
-        y: viewportHeight * 2,
-        width: 1366,
-        height: viewportHeight
-      }
-    });
+    /* ------------------------- VERIFY FILES ------------------------- */
+
+    if (!fs.existsSync(firstFoldPath) || !fs.existsSync(fullPagePath)) {
+      throw new Error("Screenshots were not generated");
+    }
+
+    /* ------------------------- ENCODE RESULT ------------------------- */
+
+    console.error("Encoding screenshots...");
 
     const result = {
       url: TARGET_URL,
       device: DEVICE,
-      firstFold: fs.readFileSync(path.join(jobDir, "firstFold.png")).toString("base64"),
-      secondFold: fs.readFileSync(path.join(jobDir, "secondFold.png")).toString("base64"),
-      thirdFold: fs.readFileSync(path.join(jobDir, "thirdFold.png")).toString("base64")
+      firstFold: fs.readFileSync(firstFoldPath).toString("base64"),
+      fullPage: fs.readFileSync(fullPagePath).toString("base64")
     };
 
     fs.writeFileSync(
@@ -130,15 +161,17 @@ const path = require("path");
       JSON.stringify(result)
     );
 
+    console.error("Capture successful");
     await browser.close();
-    console.log("Capture complete");
 
   } catch (err) {
-    console.error("CAPTURE FAILED:", err);
+
+    console.error("CAPTURE FAILED:", err.message);
 
     try {
+      const jobDir = process.argv[2] || ".";
       fs.writeFileSync(
-        path.join(process.argv[2], "result.json"),
+        path.join(jobDir, "result.json"),
         JSON.stringify({
           error: "CAPTURE_FAILED",
           message: err.message
