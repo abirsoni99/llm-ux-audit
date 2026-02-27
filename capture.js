@@ -1,5 +1,3 @@
-—-
-
 const { chromium, devices } = require("playwright");
 const fs = require("fs");
 const path = require("path");
@@ -15,7 +13,7 @@ const path = require("path");
 
     const TARGET_URL = config.url;
     const DEVICE = config.device || "desktop";
-    const AUTH_FILE = config.authFile; // provided by server.js
+    const AUTH_FILE = config.authFile;
 
     console.log("Starting capture:", TARGET_URL);
 
@@ -28,7 +26,6 @@ const path = require("path");
       ]
     });
 
-    // -------- context --------
     let context;
 
     if (DEVICE === "mobile") {
@@ -48,16 +45,19 @@ const path = require("path");
 
     const page = await context.newPage();
 
-    // -------- open page --------
+    // Faster initial navigation
     await page.goto(TARGET_URL, {
-      waitUntil: "domcontentloaded",
-      timeout: 90000
+      waitUntil: "commit",
+      timeout: 60000
     });
 
-    // give dashboard APIs time
-    await page.waitForTimeout(7000);
+    // Wait until actual content appears (instead of blind 7s delay)
+    await page.waitForFunction(() =>
+      document.body.innerText.length > 2500,
+      { timeout: 20000 }
+    );
 
-    // -------- login detection --------
+    // Detect login page
     const loginDetected = await page.evaluate(() => {
       const text = document.body.innerText.toLowerCase();
       return (
@@ -68,8 +68,6 @@ const path = require("path");
     });
 
     if (loginDetected) {
-      console.log("AUTH FAILED");
-
       fs.writeFileSync(
         path.join(jobDir, "result.json"),
         JSON.stringify({
@@ -82,33 +80,55 @@ const path = require("path");
       return;
     }
 
-    // wake lazy widgets
-    await page.evaluate(async () => {
-      window.scrollTo(0, document.body.scrollHeight);
-      await new Promise(r => setTimeout(r, 2500));
-      window.scrollTo(0, 0);
-      await new Promise(r => setTimeout(r, 1500));
-    });
+    // Trigger lazy widgets
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(2000);
+    await page.evaluate(() => window.scrollTo(0, 0));
 
-    // -------- screenshots --------
+    // -------- CAPTURE VIEWPORT SEGMENTS (faster than fullPage: true) --------
+
+    const viewportHeight = await page.evaluate(() => window.innerHeight);
+
+    // First fold
     await page.screenshot({
       path: path.join(jobDir, "firstFold.png"),
       fullPage: false
     });
 
+    // Second viewport
     await page.screenshot({
-      path: path.join(jobDir, "fullPage.png"),
-      fullPage: true
+      path: path.join(jobDir, "secondFold.png"),
+      clip: {
+        x: 0,
+        y: viewportHeight,
+        width: 1366,
+        height: viewportHeight
+      }
+    });
+
+    // Third viewport
+    await page.screenshot({
+      path: path.join(jobDir, "thirdFold.png"),
+      clip: {
+        x: 0,
+        y: viewportHeight * 2,
+        width: 1366,
+        height: viewportHeight
+      }
     });
 
     const result = {
       url: TARGET_URL,
       device: DEVICE,
       firstFold: fs.readFileSync(path.join(jobDir, "firstFold.png")).toString("base64"),
-      fullPage: fs.readFileSync(path.join(jobDir, "fullPage.png")).toString("base64")
+      secondFold: fs.readFileSync(path.join(jobDir, "secondFold.png")).toString("base64"),
+      thirdFold: fs.readFileSync(path.join(jobDir, "thirdFold.png")).toString("base64")
     };
 
-    fs.writeFileSync(path.join(jobDir, "result.json"), JSON.stringify(result));
+    fs.writeFileSync(
+      path.join(jobDir, "result.json"),
+      JSON.stringify(result)
+    );
 
     await browser.close();
     console.log("Capture complete");
