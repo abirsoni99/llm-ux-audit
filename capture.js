@@ -8,8 +8,14 @@ const path = require("path");
   try {
 
     const jobDir = process.argv[2];
+    const configPath = path.join(jobDir, "run-config.json");
+
+    if (!fs.existsSync(configPath)) {
+      throw new Error("Missing run-config.json");
+    }
+
     const config = JSON.parse(
-      fs.readFileSync(path.join(jobDir, "run-config.json"), "utf8")
+      fs.readFileSync(configPath, "utf8")
     );
 
     const TARGET_URL = config.url;
@@ -17,24 +23,18 @@ const path = require("path");
     const DEVICE = config.device || "desktop";
 
     console.log("Starting capture for:", TARGET_URL);
-    console.log("Device:", DEVICE);
 
-    // ---------- launch browser ----------
+    // ---------------- BROWSER ----------------
     browser = await chromium.launch({
       headless: true,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-background-networking",
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--disable-extensions"
+        "--disable-dev-shm-usage"
       ]
     });
 
-    // ---------- create context ----------
+    // ---------------- CONTEXT ----------------
     let context;
 
     if (DEVICE === "mobile") {
@@ -46,35 +46,32 @@ const path = require("path");
     } else {
       context = await browser.newContext({
         viewport: { width: 1366, height: 900 },
-        userAgent:
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121 Safari/537.36",
+        locale: "en-IN",
+        timezoneId: "Asia/Kolkata",
         storageState: AUTH_FILE
       });
     }
 
     const page = await context.newPage();
 
-    // ---------- go to page ----------
+    // ---------------- NAVIGATE ----------------
     await page.goto(TARGET_URL, {
       waitUntil: "domcontentloaded",
       timeout: 90000
     });
 
-    // ---------- SMART WAIT ----------
-    // Wait for network to calm instead of blind timeouts
-    try {
-      await page.waitForLoadState("networkidle", { timeout: 20000 });
-    } catch {
-      console.log("Network never fully idle — continuing");
-    }
+    // Wait for dashboard scripts to render
+    await page.waitForTimeout(8000);
 
-    // Ensure body exists
-    await page.waitForSelector("body", { timeout: 20000 });
+    // ---------------- LOGIN DETECTION ----------------
+    const currentUrl = page.url();
 
-    // ---------- detect login failure ----------
-    const urlNow = page.url();
-    if (urlNow.toLowerCase().includes("login")) {
-      console.log("LOGIN DETECTED — auth failed");
+    if (
+      currentUrl.toLowerCase().includes("login") ||
+      currentUrl.toLowerCase().includes("signin")
+    ) {
+
+      console.log("Auth failed — login detected");
 
       fs.writeFileSync(
         path.join(jobDir, "result.json"),
@@ -88,15 +85,15 @@ const path = require("path");
       return;
     }
 
-    // ---------- FIRST FOLD ----------
+    // ---------------- SCREENSHOTS ----------------
+
     await page.screenshot({
-      path: path.join(jobDir, "first-fold.png"),
+      path: path.join(jobDir, "firstFold.png"),
       fullPage: false
     });
 
-    // ---------- FULL PAGE ----------
     await page.screenshot({
-      path: path.join(jobDir, "full-page.png"),
+      path: path.join(jobDir, "fullPage.png"),
       fullPage: true
     });
 
@@ -106,10 +103,10 @@ const path = require("path");
       url: TARGET_URL,
       device: DEVICE,
       firstFold: fs
-        .readFileSync(path.join(jobDir, "first-fold.png"))
+        .readFileSync(path.join(jobDir, "firstFold.png"))
         .toString("base64"),
       fullPage: fs
-        .readFileSync(path.join(jobDir, "full-page.png"))
+        .readFileSync(path.join(jobDir, "fullPage.png"))
         .toString("base64")
     };
 
@@ -119,12 +116,12 @@ const path = require("path");
     );
 
     await browser.close();
+
     console.log("Capture complete");
 
   } catch (err) {
-    console.error("CAPTURE FAILED:", err);
 
-    if (browser) await browser.close();
+    console.error("CAPTURE FAILED:", err);
 
     try {
       fs.writeFileSync(
@@ -135,6 +132,8 @@ const path = require("path");
         })
       );
     } catch {}
+
+    if (browser) await browser.close();
 
     process.exit(1);
   }
