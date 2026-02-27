@@ -1,23 +1,50 @@
 function convertCookiesToStorageState(rawCookies, url) {
 
-  const domain = new URL(url).hostname;
+  const hostname = new URL(url).hostname;
+  const baseDomain = hostname.split('.').slice(-2).join('.');
 
-  const playwrightCookies = rawCookies.map(c => ({
-    name: c.name,
-    value: c.value,
-    domain: c.domain || domain,
-    path: c.path || "/",
-    expires: c.expirationDate
-      ? Math.floor(c.expirationDate)
-      : Math.floor(Date.now()/1000) + 86400 * 7,
-    httpOnly: c.httpOnly || false,
-    secure: c.secure || false,
-    sameSite: c.sameSite === "no_restriction"
-      ? "None"
-      : c.sameSite === "lax"
-      ? "Lax"
-      : "Strict"
-  }));
+  const playwrightCookies = rawCookies.map(c => {
+
+    // force root domain authentication
+    let domain = c.domain || hostname;
+
+    // remove leading dot inconsistencies
+    domain = domain.replace(/^\./, '');
+
+    // IMPORTANT FIX: normalize to parent domain
+    if (!domain.endsWith(baseDomain)) {
+      domain = baseDomain;
+    }
+
+    return {
+      name: c.name,
+      value: c.value,
+      domain: "." + baseDomain,
+      path: c.path || "/",
+      expires: c.expirationDate
+        ? Math.floor(c.expirationDate)
+        : Math.floor(Date.now() / 1000) + 86400 * 3,
+      httpOnly: c.httpOnly ?? true,
+      secure: true,
+      sameSite:
+        c.sameSite === "no_restriction"
+          ? "None"
+          : c.sameSite === "lax"
+          ? "Lax"
+          : "Lax"
+    };
+  });
+
+  return {
+    cookies: playwrightCookies,
+    origins: [
+      {
+        origin: `https://${hostname}`,
+        localStorage: []
+      }
+    ]
+  };
+}
 
   return {
     cookies: playwrightCookies,
