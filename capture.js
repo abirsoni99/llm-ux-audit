@@ -1,41 +1,66 @@
-const { chromium } = require("playwright");
+const { chromium, devices } = require("playwright");
 const fs = require("fs");
 
 (async () => {
   let browser;
 
   try {
-    // read input configuration from server
     const config = JSON.parse(fs.readFileSync("run-config.json", "utf8"));
 
     const TARGET_URL = config.url;
     const AUTH_FILE = config.authFile;
+    const DEVICE = config.device || "desktop";
 
     console.error("Launching browser...");
+    console.error("Device mode:", DEVICE);
 
     browser = await chromium.launch({
       headless: true,
-      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu"
+      ]
     });
 
-    console.error("Loading auth state...");
+    let context;
 
-    const context = await browser.newContext({
-      storageState: AUTH_FILE,
-      viewport: { width: 1366, height: 900 }
-    });
+    // ---------- MOBILE MODE ----------
+    if (DEVICE === "mobile") {
+      console.error("Using mobile emulation");
+
+      const iphone = devices["iPhone 13"];
+
+      context = await browser.newContext({
+        ...iphone,
+        storageState: AUTH_FILE
+      });
+    }
+
+    // ---------- DESKTOP MODE ----------
+    else {
+      console.error("Using desktop viewport");
+
+      context = await browser.newContext({
+        viewport: { width: 1366, height: 900 },
+        userAgent:
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121 Safari/537.36",
+        storageState: AUTH_FILE
+      });
+    }
 
     const page = await context.newPage();
 
-    console.error("Opening page:", TARGET_URL);
+    console.error("Opening:", TARGET_URL);
 
     await page.goto(TARGET_URL, {
       waitUntil: "domcontentloaded",
       timeout: 120000
     });
 
-    // wait for SPA dashboards to settle
-    await page.waitForTimeout(8000);
+    // SPA settle time
+    await page.waitForTimeout(7000);
 
     console.error("Capturing first fold...");
     await page.screenshot({
@@ -43,32 +68,37 @@ const fs = require("fs");
       fullPage: false
     });
 
-    console.error("Scrolling...");
+    console.error("Scrolling mid...");
     await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
     await page.waitForTimeout(3000);
 
-    console.error("Capturing mid fold...");
     await page.screenshot({
       path: "mid-fold.png",
       fullPage: false
     });
 
-    console.error("Capturing full page...");
+    console.error("Scrolling bottom...");
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(3000);
+
     await page.screenshot({
       path: "full-page.png",
-      fullPage: true
+      fullPage: false
     });
 
     await browser.close();
 
     const result = {
       url: TARGET_URL,
+      device: DEVICE,
       firstFold: fs.readFileSync("first-fold.png").toString("base64"),
       midFold: fs.readFileSync("mid-fold.png").toString("base64"),
       fullPage: fs.readFileSync("full-page.png").toString("base64")
     };
 
     fs.writeFileSync("result.json", JSON.stringify(result));
+
+    console.error("Capture complete");
 
     process.exit(0);
 
