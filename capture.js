@@ -1,96 +1,104 @@
-const { chromium } = require('playwright');
+const { chromium } = require("playwright");
+const fs = require("fs");
+const path = require("path");
 
-/* ================== CHANGE ONLY THIS ================== */
-const TARGET_URL = "https://buyer.indiamart.com/";
-/* ====================================================== */
+async function autoScroll(page) {
+  await page.evaluate(async () => {
+    await new Promise((resolve) => {
+      let totalHeight = 0;
+      const distance = 700;
+      const timer = setInterval(() => {
+        const scrollHeight = document.body.scrollHeight;
+        window.scrollBy(0, distance);
+        totalHeight += distance;
 
-
-/* ---------- HUMAN SCROLL (CRITICAL FOR LAZY LOAD) ---------- */
-async function humanScroll(page) {
-
-  console.log("Starting full page human scroll...");
-
-  let previousHeight = 0;
-
-  while (true) {
-
-    const pageHeight = await page.evaluate(() => document.body.scrollHeight);
-
-    // scroll gradually to trigger lazy loading
-    for (let y = 0; y < pageHeight; y += 450) {
-      await page.evaluate((scrollY) => window.scrollTo(0, scrollY), y);
-      await page.waitForTimeout(700);
-    }
-
-    // wait for API calls that load more cards/orders
-    await page.waitForTimeout(3500);
-
-    const newHeight = await page.evaluate(() => document.body.scrollHeight);
-
-    if (newHeight === previousHeight) {
-      break;
-    }
-
-    previousHeight = newHeight;
-  }
-
-  console.log("Reached end of dashboard content.");
-
-  // scroll back to top for clean screenshot
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(2000);
+        if (totalHeight >= scrollHeight - window.innerHeight) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 700);
+    });
+  });
 }
-/* ----------------------------------------------------------- */
 
+async function waitForRealContent(page) {
+  console.log("Waiting for page to load...");
 
-(async () => {
+  // Wait for products/cards instead of page load
+  await page.waitForSelector("img", { timeout: 60000 });
 
-  console.log("Launching browser using saved login session...");
+  // Wait additional time for lazy data
+  await page.waitForTimeout(6000);
+}
+
+async function captureSRP() {
+  console.log("Launching browser...");
 
   const browser = await chromium.launch({
-    headless: true
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage"
+    ]
   });
 
   const context = await browser.newContext({
-    storageState: 'auth.json', // uses cookies saved from loginSave.js
-    viewport: { width: 1440, height: 900 }
+    viewport: { width: 1366, height: 900 },
+    storageState: path.join(__dirname, "auth.json"),
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
   });
 
   const page = await context.newPage();
 
-  console.log("Opening buyer dashboard...");
-  await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded' });
+  try {
+    console.log("Opening Buyer MY...");
 
-  console.log("Waiting for dashboard UI to appear...");
+    await page.goto(
+      "https://buyer.indiamart.com/",
+      { waitUntil: "domcontentloaded", timeout: 90000 }
+    );
 
-  // IMPORTANT: wait for real UI, not network idle
-  await page.waitForSelector('text=Dashboard', { timeout: 60000 });
+    // Detect login redirect
+    if (page.url().includes("login")) {
+      throw new Error("Login session invalid — redirected to login page");
+    }
 
-  // give React widgets time to mount
-  await page.waitForTimeout(5000);
+    await waitForRealContent(page);
 
-  // check if session expired
-  const currentURL = page.url();
-  if (currentURL.includes("login")) {
-    console.log("\n❌ You are logged out.");
-    console.log("Run this first:");
-    console.log("node loginSave.js\n");
+    console.log("Capturing first fold...");
+    await page.screenshot({
+      path: "my1_fold1.png",
+      fullPage: false
+    });
+
+    console.log("Scrolling page...");
+    await autoScroll(page);
+
+    console.log("Capturing full page...");
+    await page.screenshot({
+      path: "my1_full.png",
+      fullPage: true
+    });
+
+    // capture mid fold
+    console.log("Capturing mid section...");
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
+    await page.waitForTimeout(3000);
+
+    await page.screenshot({
+      path: "my1_mid.png",
+      fullPage: false
+    });
+
+    console.log("Screenshots saved.");
+
+  } catch (err) {
+    console.error("Capture failed:", err.message);
+  } finally {
     await browser.close();
-    return;
   }
+}
 
-  // SCROLL THE ENTIRE PAGE
-  await humanScroll(page);
-
-  console.log("Taking full page screenshot...");
-
-  await page.screenshot({
-    path: "fullpage.png",
-    fullPage: true
-  });
-
-  console.log("✅ Screenshot saved as fullpage.png");
-
-  await browser.close();
-
-})();
+captureSRP();
