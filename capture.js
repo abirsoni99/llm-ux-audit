@@ -23,7 +23,7 @@ async function autoScroll(page) {
 }
 
 async function waitForRealContent(page) {
-  console.log("Waiting for page to load...");
+  console.error("Waiting for real content...");
   await page.waitForSelector("img", { timeout: 60000 });
   await page.waitForTimeout(6000);
 }
@@ -44,9 +44,9 @@ async function run() {
   const page = await context.newPage();
 
   try {
-    console.log("Opening Buyer MY...");
+    console.error("Opening Buyer MY...");
     await page.goto(
-      "https://buyer.indiamart.com/",
+      "https://buyer.indiamart.com",
       { waitUntil: "domcontentloaded", timeout: 90000 }
     );
 
@@ -56,22 +56,22 @@ async function run() {
 
     await waitForRealContent(page);
 
-    console.log("Capturing first fold...");
+    console.error("Capturing first fold...");
     await page.screenshot({
       path: "first-fold.png",
       fullPage: false
     });
 
-    console.log("Scrolling page...");
+    console.error("Scrolling page...");
     await autoScroll(page);
 
-    console.log("Capturing full page...");
+    console.error("Capturing full page...");
     await page.screenshot({
       path: "full-page.png",
       fullPage: true
     });
 
-    console.log("Capturing mid section...");
+    console.error("Capturing mid fold...");
     await page.evaluate(() =>
       window.scrollTo(0, document.body.scrollHeight / 2)
     );
@@ -84,14 +84,15 @@ async function run() {
 
     await browser.close();
 
-    // Convert images to base64
     const result = {
       firstFold: fs.readFileSync("first-fold.png").toString("base64"),
       midFold: fs.readFileSync("mid-fold.png").toString("base64"),
       fullPage: fs.readFileSync("full-page.png").toString("base64")
     };
 
-    console.log(JSON.stringify(result));
+    // IMPORTANT: Only JSON on stdout
+    process.stdout.write(JSON.stringify(result));
+
     process.exit(0);
   } catch (err) {
     console.error("Capture failed:", err.message);

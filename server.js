@@ -23,7 +23,7 @@ app.post("/run-audit", (req, res) => {
   });
 
   child.stderr.on("data", (data) => {
-    console.error("stderr:", data.toString());
+    console.error(data.toString());
   });
 
   child.on("close", (code) => {
@@ -32,6 +32,7 @@ app.post("/run-audit", (req, res) => {
         const parsed = JSON.parse(output);
         res.json(parsed);
       } catch (err) {
+        console.error("Parse error:", err.message);
         res.status(500).json({
           error: "Audit ran but failed to parse output"
         });
