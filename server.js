@@ -1,3 +1,29 @@
+function convertCookiesToStorageState(rawCookies, url) {
+
+  const domain = new URL(url).hostname;
+
+  const playwrightCookies = rawCookies.map(c => ({
+    name: c.name,
+    value: c.value,
+    domain: c.domain || domain,
+    path: c.path || "/",
+    expires: c.expirationDate
+      ? Math.floor(c.expirationDate)
+      : Math.floor(Date.now()/1000) + 86400 * 7,
+    httpOnly: c.httpOnly || false,
+    secure: c.secure || false,
+    sameSite: c.sameSite === "no_restriction"
+      ? "None"
+      : c.sameSite === "lax"
+      ? "Lax"
+      : "Strict"
+  }));
+
+  return {
+    cookies: playwrightCookies,
+    origins: []
+  };
+}
 const express = require("express");
 const fs = require("fs");
 const { exec } = require("child_process");
@@ -40,7 +66,17 @@ app.post("/run-audit", async (req, res) => {
 
       // write session json sent from lovable
       authFilePath = path.join(__dirname, "temp-auth.json");
-      fs.writeFileSync(authFilePath, JSON.stringify(auth));
+let storageState;
+
+if (Array.isArray(auth)) {
+  // cookie-editor export detected
+  storageState = convertCookiesToStorageState(auth, targetUrl);
+} else {
+  // already storageState
+  storageState = auth;
+}
+
+fs.writeFileSync(authFilePath, JSON.stringify(storageState));
       console.log("Temporary auth.json created");
     }
 
