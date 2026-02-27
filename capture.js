@@ -3,11 +3,7 @@ const fs = require("fs");
 
 process.setMaxListeners(0);
 
-/*
-CRITICAL RULE:
-stdout MUST contain ONLY JSON
-Everything else goes to stderr
-*/
+// stdout MUST stay clean JSON
 console.log = (...args) => {
   process.stderr.write(args.join(" ") + "\n");
 };
@@ -16,8 +12,8 @@ console.log = (...args) => {
   let browser;
 
   try {
-    const TARGET_URL =
-      process.argv[2] || "https://buyer.indiamart.com";
+    // URL can be passed later
+    const TARGET_URL = process.argv[2] || "https://buyer.indiamart.com";
 
     console.error("Launching browser...");
 
@@ -41,11 +37,13 @@ console.log = (...args) => {
       ]
     });
 
-    console.error("Loading stored login session (auth.json)...");
+    console.error("Creating browser context...");
 
     const context = await browser.newContext({
       storageState: fs.existsSync("auth.json") ? "auth.json" : undefined,
-      viewport: { width: 1366, height: 900 }
+      viewport: { width: 1366, height: 900 },
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/121 Safari/537.36"
     });
 
     const page = await context.newPage();
@@ -57,29 +55,19 @@ console.log = (...args) => {
       timeout: 120000
     });
 
-    /*
-    UNIVERSAL WAIT STRATEGY
-    We wait until:
-    - DOM exists
-    - Page height stabilizes
-    - Network quiets down enough
-    */
+    // ----- UNIVERSAL RENDER WAIT (SPA SAFE) -----
 
-    console.error("Waiting for page render stabilization...");
+    console.error("Waiting for page render...");
 
-    await page.waitForTimeout(5000);
-
-    // wait for DOM body
     await page.waitForSelector("body", { timeout: 60000 });
+    await page.waitForTimeout(6000);
 
-    // wait for page height stabilization (SPA friendly)
+    // Wait for page height stabilization
     let previousHeight = 0;
     let stableCount = 0;
 
     for (let i = 0; i < 20; i++) {
-      const height = await page.evaluate(
-        () => document.body.scrollHeight
-      );
+      const height = await page.evaluate(() => document.body.scrollHeight);
 
       if (height === previousHeight) {
         stableCount++;
@@ -94,15 +82,15 @@ console.log = (...args) => {
       await page.waitForTimeout(2000);
     }
 
-    console.error("Page stabilized. Starting screenshots...");
+    console.error("Page stabilized. Capturing screenshots...");
 
-    // -------- First Fold --------
+    // -------- First fold --------
     await page.screenshot({
       path: "first-fold.png",
       fullPage: false
     });
 
-    // -------- Mid Scroll --------
+    // -------- Mid --------
     await page.evaluate(() =>
       window.scrollTo(0, document.body.scrollHeight / 2)
     );
@@ -134,10 +122,14 @@ console.log = (...args) => {
       fullPage: fs.readFileSync("full-page.png").toString("base64")
     };
 
+    // ⭐ CRITICAL: write file for server.js
+    console.error("Writing result.json...");
+    fs.writeFileSync("result.json", JSON.stringify(result));
+
     await browser.close();
 
-    // ONLY JSON OUTPUT
-    process.stdout.write(JSON.stringify(result));
+    // keep stdout valid JSON (for debugging if needed)
+    process.stdout.write(JSON.stringify({ status: "ok" }));
     process.stdout.end();
 
   } catch (err) {
