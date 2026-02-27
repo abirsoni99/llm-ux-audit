@@ -1,26 +1,49 @@
-const { exec } = require("child_process");
+const { spawn } = require("child_process");
+const path = require("path");
 
+console.log("Worker process booted.");
+
+/*
+  This function runs the screenshot audit.
+  We use spawn (not exec) because Playwright outputs a lot of logs
+  and exec can silently die in cloud containers.
+*/
 function runAudit() {
-  console.log("Running Playwright audit...");
+  console.log("Starting Playwright audit...");
 
-  exec("node capture.js", (error, stdout, stderr) => {
-    if (error) {
-      console.error("Audit error:", error);
-      return;
-    }
+  const child = spawn("node", [path.join(__dirname, "capture.js")], {
+    stdio: "inherit"
+  });
 
-    console.log(stdout);
-    console.log("Audit finished.");
+  child.on("close", (code) => {
+    console.log("Playwright audit finished with code:", code);
+  });
+
+  child.on("error", (err) => {
+    console.error("Failed to start audit:", err);
   });
 }
 
-// run once after startup (important)
-setTimeout(runAudit, 15000);
+/* -------- RUN ON STARTUP -------- */
+/* Wait 20 seconds so container + chromium dependencies fully settle */
+setTimeout(() => {
+  runAudit();
+}, 20000);
 
-// run every 6 hours
-setInterval(runAudit, 6 * 60 * 60 * 1000);
 
-// keep container alive
+/* -------- KEEP CONTAINER ALIVE -------- */
+/* Railway will sleep containers that are quiet */
 setInterval(() => {
   console.log("Worker heartbeat alive...");
 }, 60000);
+
+
+/* -------- SCHEDULED RUNS -------- */
+/*
+   Run every 6 hours.
+   (You can later change to 1 hour if you want continuous monitoring)
+*/
+setInterval(() => {
+  console.log("Scheduled audit triggered...");
+  runAudit();
+}, 6 * 60 * 60 * 1000);
