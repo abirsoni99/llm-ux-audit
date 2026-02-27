@@ -5,7 +5,8 @@ const fs = require("fs");
   let browser;
 
   try {
-    const config = JSON.parse(fs.readFileSync("run-config.json", "utf8"));
+    const jobDir = process.argv[2];
+const config = JSON.parse(fs.readFileSync(`${jobDir}/run-config.json`, "utf8"));
 
     const TARGET_URL = config.url;
     const AUTH_FILE = config.authFile;
@@ -96,7 +97,7 @@ const fs = require("fs");
       fullPage: fs.readFileSync("full-page.png").toString("base64")
     };
 
-    fs.writeFileSync("result.json", JSON.stringify(result));
+    fs.writeFileSync("${jobDir}/result.json", JSON.stringify(result));
 
     console.error("Capture complete");
 
