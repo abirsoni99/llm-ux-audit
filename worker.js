@@ -1,33 +1,26 @@
 const { exec } = require("child_process");
-const fs = require("fs");
-const path = require("path");
 
 function runAudit() {
   console.log("Running Playwright audit...");
 
   exec("node capture.js", (error, stdout, stderr) => {
     if (error) {
-      console.error("Error:", error);
+      console.error("Audit error:", error);
       return;
     }
-    console.log(stdout);
 
-    uploadResults();
+    console.log(stdout);
+    console.log("Audit finished.");
   });
 }
 
-async function uploadResults() {
-  console.log("Screenshots ready. Uploading...");
-
-  const files = fs.readdirSync("./").filter(f => f.endsWith(".png"));
-
-  for (const file of files) {
-    console.log("Ready:", file);
-    // we will connect Lovable here
-  }
-}
-
-runAudit();
+// run once after startup (important)
+setTimeout(runAudit, 15000);
 
 // run every 6 hours
 setInterval(runAudit, 6 * 60 * 60 * 1000);
+
+// keep container alive
+setInterval(() => {
+  console.log("Worker heartbeat alive...");
+}, 60000);
